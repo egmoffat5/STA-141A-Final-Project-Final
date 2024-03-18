@@ -1,0 +1,1101 @@
+---
+title: 'STA 141A: Final Project'
+author: "Erin Moffat"
+student id: "912151225"
+professor: "Dr. Shizhe Chen"
+ta: "Mr. Yan-Yu Chen & Ms. Jue Wang"
+date: "2024-03-18"
+output: html_document
+---
+
+```{r setup, echo=FALSE, warning=FALSE}
+knitr::opts_knit$set(root.dir = 'C:/Users/Moust/Documents/STA 141A/STA141AProject', warning=FALSE, message=FALSE)
+library(bookdown) 
+```
+
+# **Abstract**
+  
+Steinmetz et. al conducted a study on mice performance based off a behavior task, where data was collected on various factors such as on brain areas, neuronal information, and presented stimuli (2019). The purpose of this data science project is to gain insights on the data through data exploration and use those insights to integrate the data. This integrated data is then used to build a prediction model in order to predict if the mice had a successful trial or not. Overall, findings from the exploratory data analysis resulted in showing importance of the trial number, session number, presented stimuli and neuronal data. The conclusions of this project suggest that other questions remain, and although the chosen variables are related to the model, improvement can be made in order to develop a more accurate model.
+
+# **Introduction**
+ 
+In order to assess brain activity of mice and analyze the distribution of neurons involved while mice engaged in a behavioral task, a study was conducted by Steinmetz et al and published in the scientific *Nature* journal (2019). The study used neuropixel probes to assess signals in different brain areas, with a purpose of studying the brain signals that are related to a choice, which is made before an action itself. The neural activity was also recorded during the action itself in order to assess neuron distribution across the areas beyond choice, including action, behavioral engagement and vision. These four factors are all involved in the chosen behavioral activity (Steinmetz et. al, 2019). 
+  
+The study takes place for 10 mice across 39 separate sessions (Steinmetz et. al, 2019). For each trial of the session, the mice were presented with images to their left and right, as well as both their left and their right, or neither their left nor their right. Images were presented at one of four contrast levels: 0, 0.25, 0.50 and 1. A water reward was used in order to help ensure engagement of the mice in the task, and a white noise was presented when mice choice was incorrect. Feedback after each trial was recorded, with a 1 recorded if the mice turned the wheel toward the higher contrast or in the case of no image, kept the wheel still. If unsuccessful, the water reward was held back and a -1 was recorded for feedback. Another condition entailed presentation of equal image contrasts, where the successful reward was randomly assigned to the mice for left or right turns (Steinmetz et al, 2019).  
+  
+Recorded information for the study include the experiment date, the feedback type, and the contrast (Steinmetz et al, 2019). The neuropixel probes were placed in different locations for each session, and data was recorded throughout the session. Time spikes was the recorded count for the amount of spikes across 40 time bins that occurred for each trial of each session. In addition, another variable included the brain areas that the probes were placed in, where neuron activity was recorded, for each session (Steinmetz et al, 2019). 
+  
+This project will analyze data using R from just four of the ten mice across 18 of the 39 sessions. This project seeks to build a predictive model that will predict the outcome of each trial, whether the trial was a success or a failure, based off the data from the study. There have been 100 trials removed from both session 1 and session 18 that will be used to assess the performance of the prediction model.  
+  
+![Study Pictures (Steinmetz et. al, 2019)](C:/Users/Moust/Pictures/3mouse.jpg)
+
+# **Exploratory Data Analysis**    
+##**Summary of The Data Across Sessions**  
+### What are overall session trends? 
+```{r, include=FALSE}
+library(corrr)
+library(tidyverse)
+library(readr)        
+library(dplyr)         
+library(ggplot2)  
+library(knitr)
+library(lubridate)
+library(ggcorrplot)
+library(caret) 
+library(ROCR)
+library(gridExtra)    
+library(lubridate) 
+```
+
+```{r,eval=TRUE, echo=FALSE}
+session=list()
+for(i in 1:18){
+  session[[i]]=readRDS(paste('./Data/sessions/session',i,'.rds',sep=''))
+  
+}
+```
+
+To begin the project, looking at information across sessions is the starting point before looking at the smaller details. Using this top-down approach can allow a general understanding of the data before developing a fuller, more detailed viewpoint of patterns within the data. In order to assess what variables may be impacting the results for the mice, a table follows, with information that attempts to encompass summaries for different variables within each session. 
+
+```{r, echo=FALSE, include=FALSE}
+get_trail_data <- function(session_id, trail_id){
+  spikes <- session[[session_id]]$spks[[trail_id]]
+  if (any(is.na(spikes))){
+    disp("value missing")
+  }
+
+  #trail_tibble <- as_tibble(spikes) %>% set_names(binename) %>%  add_column("brain_area" = session[[session_id]]$brain_area ) %>% group_by(brain_area) %>% summarize( "sum_spikes" =across(everything(),sum),.groups = "drop") 
+  trail_tibble <- tibble("neuron_spike" = rowSums(spikes))  %>%  add_column("brain_area" = session[[session_id]]$brain_area ) %>% filter(neuron_spike > 0) %>% group_by(brain_area) %>% summarize( region_sum_spike = sum(neuron_spike), region_count = n(),region_mean_spike = mean(neuron_spike)) 
+  trail_tibble  = trail_tibble%>% add_column("trail_id" = trail_id) %>% add_column("contrast_left"= session[[session_id]]$contrast_left[trail_id]) %>% add_column("contrast_right"= session[[session_id]]$contrast_right[trail_id]) %>% add_column("feedback_type"= session[[session_id]]$feedback_type[trail_id])
+  trail_tibble
+}
+
+get_session_data <- function(session_id){
+  n_trail <- length(session[[session_id]]$spks)
+  trail_list <- list()
+  for (trail_id in 1:n_trail){
+    trail_tibble <- get_trail_data(session_id,trail_id)
+    trail_list[[trail_id]] <- trail_tibble
+  }
+  session_tibble <- do.call(rbind, trail_list)
+  session_tibble <- session_tibble %>% add_column("mouse_name" = session[[session_id]]$mouse_name) %>% add_column("date_exp" = session[[session_id]]$date_exp) %>% add_column("session_id" = session_id) 
+  session_tibble
+}
+
+all_sessions_data <- lapply(1:length(session), get_session_data)
+combined_sessions_data <- bind_rows(all_sessions_data)
+average_region_spikes_per_session <- combined_sessions_data %>%
+  group_by(session_id, brain_area) %>%
+  summarize(average_region_mean_spike = mean(region_mean_spike, na.rm = TRUE)) %>%
+  ungroup()
+
+average_spikes_per_session <- average_region_spikes_per_session %>%
+  group_by(session_id) %>%
+  summarize(average_spikes_per_session = mean(average_region_mean_spike, na.rm = TRUE))
+
+print(average_spikes_per_session) 
+
+n.session=length(session)
+
+meta <- tibble(
+  session=rep('name',n.session),
+  mouse_name = rep('name',n.session),
+  date_exp =rep('dt',n.session),
+  n_brain_area = rep(0,n.session),
+  n_neurons = rep(0,n.session),
+  n_trials = rep(0,n.session),
+  success_rate = rep(0,n.session),
+  contrast_left = rep(0,n.session),
+  contrast_right = rep(0,n.session),
+  ratio_right_contrast= rep(0,n.session),
+  ratio_left_contrast= rep(0,n.session),
+
+)
+
+for(i in 1:n.session){
+  tmp = session[[i]];
+  meta[, 1]= 1:18;
+  meta[i,2]=tmp$mouse_name;
+  meta[i,3]=tmp$date_exp;
+  meta[i,4]=length(unique(tmp$brain_area)); ##this will correspond to the number of rows in the spikes in the first trial (734 neurons )
+  meta[i,5]=dim(tmp$spks[[1]])[1];
+  meta[i,6]=length(tmp$feedback_type); #this is the number of trials we have
+  meta[i,7]=mean(tmp$feedback_type+1)/2; #we can take the average
+  meta[i,8]=mean(tmp$contrast_left);
+  meta[i,9]=mean(tmp$contrast_right);
+  meta[i,10]=mean(tmp$contrast_left)/mean(tmp$contrast_right);
+  meta[i,11]=mean(tmp$contrast_right)/(mean(tmp$contrast_left))
+
+}
+
+colnames(meta) <- c("Session", "Mouse Name", "Experiment Date", "Number of Brain Areas", "Number of Neurons", "Number of Trials", "Success Rate", "Avg. Left Contrast Level", "Avg. Right Contrast Level", "Ratio Left Vs Right", "Ratio Right Vs Left")
+
+
+kable(meta, format = "html", table.attr = "class='table table-striped'",digits=2) 
+
+
+```
+
+```{r, echo=FALSE}
+library(rmarkdown)
+
+fullMeta<- cbind(meta, average_spikes_per_session)
+
+fullMeta<- fullMeta[-12]
+paged_table(fullMeta, options = NULL)
+```
+  
+From this table, it is evident that information differed across sessions for many variables, such as the number of neurons, the number of brain areas, the date, the average of regional spikes (spike mean), and the mouse. In addition, another data aspect worth mentioning is how the average contrast level differed. Per session, the range of average contrast level varied from 0.24 for left contrast with a high of 0.43. In addition, we can also notice the contrast ratios. For these columns "Ratio Left Vs Right" and "Ratio Right Vs Left", I divided the average left contrast by the right contrast and the average right contrast by the left contrast, respectively. The ratio for one average contrast compared to another is also shown to vary. This is important because the contrast is the presented stimuli, so analysis over the contrast should follow. This general summary of information can now allow visual representations in order to assess and discover trends or patterns across sessions. 
+  
+### **What Patterns Can Be Found Across Sessions?**      
+This section will attempt to ask and answer questions based off of differences between sessions. The table has shown differences exist, so the goal is to attempt to gain an understanding of those differences and patterns as well as to describe what is meaningful across sessions.   
+  
+```{r, echo=FALSE}
+session <- list()
+avgScore <- vector("numeric", 18)
+for(i in 1:18) {
+   session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+   avgScore[i] <- mean(session[[i]]$feedback_type+1)/2
+ 
+}
+
+session <- list()
+numberTrials <- vector("numeric", 18)
+
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  numberTrials[i] <- length(session[[i]]$feedback_type)
+}
+
+par(mfrow=c(1,2)) # 
+barplot(height=numberTrials, names=1:18, col="pink", xlab= "Session Number", ylab="Number of Trials", main="Number of Trials Per Session")
+barplot(height=avgScore, names=1:18, col="plum", xlab= "Session Number", ylab="Success Rate", main="Avg Feedback Score Per Session")
+
+
+```
+```{r, echo=FALSE, include=FALSE}
+avgScore
+numberTrials 
+```
+
+
+There are two graphs depicted above for the number of trials and success rate across sessions. The number of trials ran per session varied, with the first 8 sessions having less trials per session than the 9th through 12th session. The success rate also had an overall trend of increasing across sessions, from around 63.34% success during the second session to around 83.04% success during Session 18. We can see that the 10th session, which had a lower success rate than expected based off of the increasing trend, at just 61.97%, has the most trials, at 447, which could support that too many trials per session can skew the results. Further analysis within the sessions could reveal why there are dips in some feedback scores, such as session 10. It is possible the amount of sessions can impact average results per session due to factors not explicitly measured in the data, such as mice getting tired over time. These or other characteristics can influence the mouse performance and lead to the dips in success rate.
+  
+
+```{r, echo=FALSE, include=FALSE}
+##add a legend??
+session <- list()
+contrastL <- vector("numeric", 18)
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  contrastL[i] <- mean(session[[i]]$contrast_left)
+}
+session <- list()
+
+contrastR<- vector("numeric", 18)
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  contrastR[i] <- mean(session[[i]]$contrast_right)
+}
+session <- list()
+
+contrastDiffLOR<- vector("numeric", 18)
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  contrastDiffLOR[i] <- mean(session[[i]]$contrast_left)/ mean(session[[i]]$contrast_right)
+}
+contrastDiffROL<- vector("numeric", 18)
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  contrastDiffROL[i] <- mean(session[[i]]$contrast_right)/ mean(session[[i]]$contrast_left)
+}
+
+contrastDiffLMR<- vector("numeric", 18)
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  contrastDiffLMR[i] <- mean(session[[i]]$contrast_left)-mean(session[[i]]$contrast_right)
+}
+contrastDiffRML<- vector("numeric", 18)
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  contrastDiffRML[i] <- mean(session[[i]]$contrast_right)- mean(session[[i]]$contrast_left)
+}
+
+par(mfrow=c(1,2)) # 
+plot(contrastR, names.arg=1:18, main="Avg Right Contrast Per Session ", xlab="Session", ylab="Contrast", col = "turquoise",  pch=19)
+
+
+
+plot(contrastL, names.arg=1:18, main="Avg Left Contrast Per Session ", xlab="Session", ylab="Contrast", col = "pink",  pch=19)
+
+
+
+```
+### **Average Contrast Data Per Session**   
+Below the graphs summarize information across sessions on the x-axis and compare the success rate (blue line) to the recorded average contrast difference or ratio (violet line). Data has been scaled in order to compare the different variables without units. 
+
+```{r, echo=FALSE, warning=FALSE}
+par(mfrow=c(2,2)) 
+
+plot(scale(contrastDiffLMR), names.arg=1:18, main="Left Minus Right: Avg Contrast", xlab="Session Number", ylab="Contrast", col = "violet",  pch=19)
+abline(lm(scale(contrastDiffLMR) ~ c(1:18)), col="darkviolet")
+abline(lm(scale(meta$`Success Rate`) ~ c(1:18)), col="blue")
+
+plot(scale(contrastDiffRML), names.arg=1:18, main="Avg Left to Right Ratio Per Session", xlab="Session Number", ylab="Contrast", col = "violet",  pch=19)
+abline(lm(scale(contrastDiffRML) ~ c(1:18)), col="darkviolet")
+abline(lm(scale(meta$`Success Rate`) ~ c(1:18)), col="blue")
+
+plot(scale(contrastDiffLOR), names.arg=1:18, main="Right Minus Left: Avg Contrast", xlab="Session Number", ylab="Contrast", col = "pink",  pch=19)
+abline(lm(scale(contrastDiffLOR) ~ c(1:18)), col="darkviolet")
+abline(lm(scale(meta$`Success Rate`) ~ c(1:18)), col="blue")
+
+plot(scale(contrastDiffROL), names.arg=1:18, main="Avg Right to Left Ratio Per Session", xlab="Session Number", ylab="Contrast", col = "violet",  pch=19)
+abline(lm(scale(contrastDiffROL) ~ c(1:18)), col="darkviolet")
+abline(lm(scale(meta$`Success Rate`) ~ c(1:18)), col="blue")
+
+legend("bottom", inset=c(0,-0.3), legend=c("Data Points", "LM Fit: Contrast", "LM Fit: Success Rate"), 
+       col=c("violet", "darkviolet", "blue"), pch=19, lty=c(NA, 1, 1), merge=TRUE, cex=0.8, x.intersp=0.5, horiz=TRUE)
+```
+
+From the data above, there are patterns between the average contrast and success rate across sessions. The violet line representing success rate is shown to be increasing in each graph, which makes sense based off prior findings. Both the right minus left and left minus right differences in average contrasts show a trend of increasing across sessions. This is interesting because it could indicate a learning rate that is surpassing an increased difference in average contrast levels. In addition, the ratio of left to right average contrasts and the ratio of right to left average contrasts show a pattern of decreasing across sessions, while the success rate continues to increase. This leaves behind questions of how to define the relationship between different contrast levels and success rate as well as whether the differences or trends are statistically significant, because the modeled linear line may not be a good fit to describe the data trends. Looking at the data points themselves, it appears that there is an increased difference in average contrast levels towards the middle of the subtraction graphs, which may skew the data. Overall, these findings suggest that on the average level, contrast ratios may not predict success due to their variance across sessions.  
+
+```{r, echo=FALSE}
+session <- list()
+
+num.areas<- vector("numeric", 18)
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  num.areas[i] <- length(unique(session[[i]]$brain_area))
+}
+
+par(mfrow=c(1,2)) # 
+barplot(fullMeta$average_spikes_per_session, names.arg=1:18, main="Avg Spikes Per Session", xlab="Session", ylab="Average Spikes (>0)", col = "blue")
+barplot(num.areas, names.arg=1:18, main="Brain Areas ", xlab="Session", ylab="Number of Brain Areas", col = "purple")
+```
+  
+These tables illustrate both the average spikes per session and the average brain areas per session varied.  
+
+## Neural Activity Per Trial
+
+There is unique neural activity that is recorded for each individual trial and developing an understanding of this could be beneficial to predicting the actions of the mice. This section first assesses individual sessions. We have seen prior that sessions with more trials have a lower success rate. Therefore it is of interest to compare neuronal activity between trials at the start and towards the end of the session.  
+
+#### **Average Spike Data Per Session Trial**
+In order to understand the session data per trial, we look at average neuron spike data for the beginning versus later trials of each session.  
+```{r, echo=FALSE}
+
+session <- list()
+avg.spikes <- vector("numeric", 18)
+
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  spks.trial=session[[i]]$spks[[1]]
+  total.spikes=apply(spks.trial,1,sum)
+  avg.spikes[i] <- mean(total.spikes)
+}
+
+session <- list()
+avg.spikes2 <- vector("numeric", 18)
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  spks.trial=session[[i]]$spks[[110]]
+  total.spikes=apply(spks.trial,1,sum)
+  avg.spikes2[i] <- mean(total.spikes)
+}
+par(mfrow=c(1,2)) 
+
+plot(avg.spikes, x=1:18, main="Avg Spikes Per Session Trial 1 ", xlab="Session", ylab="Spikes", col = "pink",  pch=19)
+
+plot(avg.spikes2, x=1:18, main="Avg Spikes Per Session Trial 100 ", xlab="Session", ylab="Spikes", col = "lightgreen",  pch=19)
+
+```
+  
+Recorded brain activity appears to differ across the session, with fluctuations in the recorded neurons per session. This can indicate a unique difference across trials within the each session, although surprisingly the trial 100 does not have spike activity as low as expected, though overall the activity does potentially appear a little lower and could impact the mouse performance. In order to further assess differences across trials within a session, I present 2 plots that have merged the time bins into 5 categories.
+```{r, echo=FALSE, include=FALSE}
+#In addition, the number of unique brain areas recorded per session also differs, with some sessions having 5 unique brain areas and others up to 14 unique brain areas.
+createTable <- function(i.s){
+
+    n.trial=length(session[[i.s]]$feedback_type)
+    n.area=length(unique(session[[i.s]]$brain_area ))
+    trial.summary2 =matrix(nrow=n.trial,ncol= 1+1+1+1+2+1+1+1)
+    for(i.t in 1:n.trial){
+      spks.trial=session[[i]]$spks[[1]]
+      total.spikes=apply(spks.trial,1,sum)
+      trial.summary2[i.t,]=c(i.s,
+                          i.t,
+                          session[[i.s]]$mouse_name,
+                          session[[i.s]]$feedback_type[i.t],
+                          session[[i.s]]$contrast_left[i.t],
+                          session[[i.s]]$contrast_right[i.t],
+                          avg.spikes=as.numeric(round(mean((apply(session[[i.s]]$spks[[i.t]],1,sum))>0), digits=2)),
+                          LeftMinRight= session[[i.s]]$contrast_left[i.t]-session[[i.s]]$contrast_right[i.t],
+                          RightMinLeft=session[[i.s]]$contrast_right[i.t]-session[[i.s]]$contrast_left[i.t])
+                                                          
+      
+    }
+    
+    colnames(trial.summary2)=c('session number','Trial Number','mouse name', 'feedback', 'left contr.','right contr.', 'avg spikes','Left-Right Contr.', 'Right -Left Contr.')
+  
+  trial.summary2 <- as_tibble(trial.summary2)
+  
+  trial.summary2
+
+}
+
+FullFrame<- rbind(createTable(1),createTable(2),createTable(3),createTable(4),createTable(5),createTable(6),createTable(7),createTable(8),createTable(9),createTable(10),createTable(11),createTable(12),createTable(13),createTable(14),createTable(15),createTable(16),createTable(17),createTable(18))
+head(FullFrame)
+
+get_trail_data <- function(session_id, trail_id){
+  spikes <- session[[session_id]]$spks[[trail_id]]
+  if (any(is.na(spikes))){
+    disp("value missing")
+  }
+
+  #trail_tibble <- as_tibble(spikes) %>% set_names(binename) %>%  add_column("brain_area" = session[[session_id]]$brain_area ) %>% group_by(brain_area) %>% summarize( "sum_spikes" =across(everything(),sum),.groups = "drop") 
+  trail_tibble <- tibble("neuron_spike" = rowSums(spikes))  %>%  add_column("brain_area" = session[[session_id]]$brain_area ) %>% filter(neuron_spike > 0) %>% group_by(brain_area) %>% summarize( region_sum_spike = sum(neuron_spike), region_count = n(),region_mean_spike = mean(neuron_spike)) 
+  trail_tibble  = trail_tibble%>% add_column("trail_id" = trail_id) %>% add_column("contrast_left"= session[[session_id]]$contrast_left[trail_id]) %>% add_column("contrast_right"= session[[session_id]]$contrast_right[trail_id]) %>% add_column("feedback_type"= session[[session_id]]$feedback_type[trail_id])
+  trail_tibble
+}
+
+get_session_data <- function(session_id){
+  n_trail <- length(session[[session_id]]$spks)
+  trail_list <- list()
+  for (trail_id in 1:n_trail){
+    trail_tibble <- get_trail_data(session_id,trail_id)
+    trail_list[[trail_id]] <- trail_tibble
+  }
+  session_tibble <- do.call(rbind, trail_list)
+  session_tibble <- session_tibble %>% add_column("mouse_name" = session[[session_id]]$mouse_name) %>% add_column("date_exp" = session[[session_id]]$date_exp) %>% add_column("session_id" = session_id) 
+  session_tibble
+}
+session_list = list()
+for (session_id in 1: 18){
+  session_list[[session_id]] <- get_session_data(session_id)
+}
+full_tibble <- do.call(rbind, session_list)
+full_tibble$success <- full_tibble$feedback_type == 1
+full_tibble$success <- as.numeric(full_tibble$success)
+full_tibble$contrast_diff <- abs(full_tibble$contrast_left-full_tibble$contrast_right)
+
+binename <- paste0("bin", as.character(1:40))
+
+get_trail_functional_data <- function(session_id, trail_id){
+  spikes <- session[[session_id]]$spks[[trail_id]]
+  if (any(is.na(spikes))){
+    disp("value missing")
+  }
+
+  trail_bin_average <- matrix(colMeans(spikes), nrow = 1)
+  colnames(trail_bin_average) <- binename
+  trail_tibble  = as_tibble(trail_bin_average)%>% add_column("trail_id" = trail_id) %>% add_column("contrast_left"= session[[session_id]]$contrast_left[trail_id]) %>% add_column("contrast_right"= session[[session_id]]$contrast_right[trail_id]) %>% add_column("feedback_type"= session[[session_id]]$feedback_type[trail_id])
+  
+  trail_tibble
+}
+get_session_functional_data <- function(session_id){
+  n_trail <- length(session[[session_id]]$spks)
+  trail_list <- list()
+  for (trail_id in 1:n_trail){
+    trail_tibble <- get_trail_functional_data(session_id,trail_id)
+    trail_list[[trail_id]] <- trail_tibble
+  }
+  session_tibble <- as_tibble(do.call(rbind, trail_list))
+  session_tibble <- session_tibble %>% add_column("mouse_name" = session[[session_id]]$mouse_name) %>% add_column("date_exp" = session[[session_id]]$date_exp) %>% add_column("session_id" = session_id) 
+  session_tibble
+}
+
+get_trail_functional_data <- function(session_id, trail_id){
+  spikes <- session[[session_id]]$spks[[trail_id]]
+  if (any(is.na(spikes))){
+    message("value missing")
+  }
+    active_neurons <- spikes[rowSums(spikes) > 0, ]
+  trail_bin_average <- if(nrow(active_neurons) > 0){
+    matrix(colMeans(active_neurons), nrow = 1)
+  } else {
+    matrix(rep(NA, ncol(spikes)), nrow = 1) # Return NA if no active neurons
+  }
+  colnames(trail_bin_average) <- binename
+  trail_tibble  = as_tibble(trail_bin_average) %>% 
+    add_column("trail_id" = trail_id) %>% 
+    add_column("contrast_left"= session[[session_id]]$contrast_left[trail_id]) %>% 
+    add_column("contrast_right"= session[[session_id]]$contrast_right[trail_id]) %>% 
+    add_column("feedback_type"= session[[session_id]]$feedback_type[trail_id])
+  
+  trail_tibble
+}
+
+session_list = list()
+for (session_id in 1: 18){
+  session_list[[session_id]] <- get_session_functional_data(session_id)
+}
+full_functional_tibble <- as_tibble(do.call(rbind, session_list))
+full_functional_tibble$session_id <- as.factor(full_functional_tibble$session_id )
+full_functional_tibble$contrast_diff <- abs(full_functional_tibble$contrast_left-full_functional_tibble$contrast_right)
+
+full_functional_tibble$success <- full_functional_tibble$feedback_type == 1
+full_functional_tibble$success <- as.numeric(full_functional_tibble$success)
+full_functional_tibble <-full_functional_tibble[-c(41:49)]
+
+```
+
+```{r, echo=FALSE, include=FALSE}
+FullFramebind <- cbind(FullFrame, full_functional_tibble)
+FullFramebind$`avg spikes`=as.numeric(FullFramebind$`avg spikes`)
+FullFramebind$`feedback`=as.factor(FullFramebind$`feedback`)
+FullFramebind[7] = FullFramebind[7] %>% scale()
+```
+
+```{r,  include=FALSE, echo=FALSE}
+binDF <-full_functional_tibble
+head(binDF)
+averaged_columns_df <- as.data.frame(sapply(1:5, function(i) {
+  subset <- full_functional_tibble[, ((i-1)*8+1):(i*8)]
+    scaled_subset <- t(apply(subset, 1, function(row) {
+    (row - mean(row, na.rm = TRUE)) / sd(row, na.rm = TRUE)
+  }))
+    rowMeans(scaled_subset, na.rm = TRUE)
+}))
+
+colnames(averaged_columns_df) <- c("Time Bins:1-8", "Time Bins: 9-16", "Time Bins: 17-24", "Time Bins: 25-32", "Time Bins: 33-40")
+head(averaged_columns_df)
+head(averaged_columns_df)
+column_means <- colMeans(binDF, na.rm = TRUE) 
+means_df <- data.frame(column_name = names(column_means), mean = column_means)
+
+averaged_columns_df <- as.data.frame(sapply(1:5, function(i) {
+  rowMeans(full_functional_tibble[, ((i-1)*8+1):(i*8)], na.rm = TRUE)
+}))
+colnames(averaged_columns_df) <- c("Time Bins:1-8", "Time Bins: 9-16", "Time Bins: 17-24", "Time Bins: 25-32", "Time Bins: 33-40")
+head(averaged_columns_df)
+
+#last_9_columns_df <- full_functional_tibble[, (ncol(df)-8):ncol(df)]
+
+#if(!is.data.frame(last_9_columns_df)) {
+  #last_9_columns_df <- as.data.frame(last_9_columns_df)
+#}
+condenseBinandFull <- cbind(averaged_columns_df, FullFrame)
+
+var5 <- condenseBinandFull %>% filter(`session number` == 5)
+var9 <- condenseBinandFull %>% filter(`session number` == 9)
+
+head(condenseBinandFull)
+head(full_functional_tibble)
+
+
+
+
+```
+
+```{r, echo=FALSE}
+ggplot() +
+
+  geom_point(data = var5, aes(x = `Trial Number`, y = `Time Bins:1-8`, color = "Time Bins:1-8")) +
+  geom_point(data = var5, aes(x = `Trial Number`, y = `Time Bins: 9-16`, color = "Time Bins: 9-16")) +
+  geom_point(data = var5, aes(x = `Trial Number`, y = `Time Bins: 17-24`, color = "Time Bins: 17-24")) +
+
+  geom_point(data = var5, aes(x = `Trial Number`, y = `Time Bins: 25-32`, color = "Time Bins: 25-32")) +
+  geom_point(data = var5, aes(x = `Trial Number`, y = `Time Bins: 33-40`, color = "Time Bins: 33-40")) +
+  xlab("Trial Number") +
+  ylab("Average Neuron Spikes") +
+  scale_colour_manual(name = "Lift type", 
+                      breaks = c("Time Bins:1-8", "Time Bins: 9-16", "Time Bins: 17-24",
+                                 "Time Bins: 25-32", "Time Bins: 33-40", "Female bench press"),
+                    values = c("green", "blue", "red", "darkolivegreen", "cyan")) +
+  ggtitle("Session 5 Time Bin Trends")
+
+ggplot() +
+
+  geom_point(data = var9, aes(x = `Trial Number`, y = `Time Bins:1-8`, color = "Time Bins:1-8")) +
+  geom_point(data = var9, aes(x = `Trial Number`, y = `Time Bins: 9-16`, color = "Time Bins: 9-16")) +
+  geom_point(data = var9, aes(x = `Trial Number`, y = `Time Bins: 17-24`, color = "Time Bins: 17-24")) +
+
+  geom_point(data = var9, aes(x = `Trial Number`, y = `Time Bins: 25-32`, color = "Time Bins: 25-32")) +
+  geom_point(data = var9, aes(x = `Trial Number`, y = `Time Bins: 33-40`, color = "Time Bins: 33-40")) +
+  xlab("Trial Number") +
+  ylab("Average Neuron Spikes") +
+  scale_colour_manual(name = "Lift type", 
+                      breaks = c("Time Bins:1-8", "Time Bins: 9-16", "Time Bins: 17-24",
+                                 "Time Bins: 25-32", "Time Bins: 33-40", "Female bench press"),
+                    values = c("green", "blue", "red", "darkolivegreen", "cyan")) +
+  ggtitle("Session 9 Time Bin Trends")
+
+```
+  
+There appears to be a range of activity within the measured spike data both across trials and across sessions. These graphs illustrate the complexity of the neuronal data, and leave more questions in regards to how the time bins effect success rate. The time bin neural activity averages varied across sessions; however, a potential pattern can be noted within the graphs. Neuron spike activity appears lower on average for time bins 1-8 and higher on average for time bins 33-40. 
+  
+### **How are the time bins related to each other?**  
+```{r, echo=FALSE}
+LederMeta <-meta %>% filter(`Mouse Name`=="Lederberg")
+
+TimeBinCor = condenseBinandFull %>% select(c(`Time Bins:1-8`, `Time Bins: 9-16`, `Time Bins: 17-24`, `Time Bins: 25-32`, `Time Bins: 33-40`)) %>%cor
+plot1 <- ggcorrplot(TimeBinCor, type = "lower", hc.order = TRUE, lab = TRUE, title = "Time Bin Correlation Plot")
+plot1
+
+
+```
+  
+The time bin correlation plot illustrates the relationship between the merged time bins. This plot shows higher correlation between grouped time bins that are closer together, such as the 4th and 5th time bin groups. For instance, time bins 25-32 and 33-40 are more correlated with each other than time bins 1-8 and 33-40. This is important because it shows that their is a relationship between the 40 recorded time bins within each trial. It is possible that grouping the time bins together can help explain performance within the model, as neuronal data across certain time bins is associated with each other.
+
+
+
+### **Success Per Trial Across Session 3 Stimulis**
+```{r, include=FALSE, echo=FALSE}
+i.s=3
+n.contrast=length(unique(session[[i.s]]$contrast_left ))
+n.trial = length(session[[i.s]]$feedback_type)
+n.area = length(unique(session[[i.s]]$brain_area ))
+
+average_spike_area<-function(i.t,this_session){
+  spk.trial = this_session$spks[[i.t]]
+  area= this_session$brain_area
+  spk.count=apply(spk.trial,1,sum)
+  spk.average.tapply=tapply(spk.count, area, mean)
+  return(spk.average.tapply)
+}
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.t],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+trial.summary <- as_tibble(trial.summary)
+par(mfrow=c(1,2)) # 
+
+
+contrastPieL = trial.summary %>% group_by(`left contr.`) %>% count() %>% 
+  ungroup() %>% 
+  mutate(perc = `n` / sum(`n`)) %>% 
+  arrange(perc) %>%
+  mutate(labels = scales::percent(perc))
+
+contrastPieR = trial.summary %>% group_by(`right contr.`) %>% count() %>% 
+  ungroup() %>% 
+  mutate(perc = `n` / sum(`n`)) %>% 
+  arrange(perc) %>%
+  mutate(labels = scales::percent(perc))
+
+
+```
+
+```{r, echo=FALSE, include=FALSE}
+par(mfrow=c(1,2)) # 
+
+ggplot(contrastPieL, aes(x = "", y = perc, fill = `left contr.`)) + 
+    geom_col() + 
+    geom_text(aes(label = labels), position = position_stack(vjust = 0.5)) + 
+    coord_polar(theta = "y")
+
+ggplot(contrastPieR, aes(x = "", y = perc, fill = `right contr.`)) + 
+    geom_col() + 
+    geom_text(aes(label = labels), position = position_stack(vjust = 0.5)) + 
+    coord_polar(theta = "y")
+```
+### **Stimuli Condition**   
+### Success Per Trial Across Session 3 Stimulis
+
+In order to understand how mice reacted to the stimuli conditions, we can look at a pie chart representation. These figures show the percent that a contrast was shown for a successful or unsuccessful feedback across session 3. The left column of pie charts has been grouped by successes, and the right has been grouped by failures. 
+```{r, echo=FALSE, include=FALSE}
+
+Success <- trial.summary %>%filter(feedback==1)
+head(Success)
+head(trial.summary)
+Success = Success %>% group_by(`left contr.`) %>% count() %>% 
+  ungroup() %>% 
+  mutate(perc = `n` / sum(`n`)) %>% 
+  arrange(perc) %>%
+  mutate(labels = scales::percent(perc))
+
+ggplot(Success, aes(x = "", y = perc, fill = `left contr.`)) + 
+    geom_col() + 
+    geom_text(aes(label = labels), position = position_stack(vjust = 0.5)) + 
+    coord_polar(theta = "y")
+Fail <- trial.summary %>%filter(feedback==-1)
+head(Fail)
+head(trial.summary)
+Fail = Fail %>% group_by(`left contr.`) %>% count() %>% 
+  ungroup() %>% 
+  mutate(perc = `n` / sum(`n`)) %>% 
+  arrange(perc) %>%
+  mutate(labels = scales::percent(perc))
+
+SuccessRight <- trial.summary %>%filter(feedback==1)
+head(Success)
+head(trial.summary)
+SuccessRight = SuccessRight %>% group_by(`right contr.`) %>% count() %>% 
+  ungroup() %>% 
+  mutate(perc = `n` / sum(`n`)) %>% 
+  arrange(perc) %>%
+  mutate(labels = scales::percent(perc))
+
+FailRight <- trial.summary %>%filter(feedback==-1)
+head(Fail)
+head(trial.summary)
+FailRight = FailRight %>% group_by(`right contr.`) %>% count() %>% 
+  ungroup() %>% 
+  mutate(perc = `n` / sum(`n`)) %>% 
+  arrange(perc) %>%
+  mutate(labels = scales::percent(perc))
+
+```
+```{r, echo=FALSE}
+plotA=ggplot(Success, aes(x = "", y = perc, fill = `left contr.`)) + 
+    geom_col() + 
+    geom_text(aes(label = labels), position = position_stack(vjust = 0.5)) + 
+    coord_polar(theta = "y")+
+    labs(title="% Left Contrast Lvl Per Successes")
+plotB=ggplot(Fail, aes(x = "", y = perc, fill = `left contr.`)) + 
+    geom_col() + 
+    geom_text(aes(label = labels), position = position_stack(vjust = 0.5)) + 
+    coord_polar(theta = "y")+
+    labs(title="% Left Contrast Lvl Per Failures")
+plotC=ggplot(SuccessRight, aes(x = "", y = perc, fill = `right contr.`)) + 
+    geom_col() + 
+    geom_text(aes(label = labels), position = position_stack(vjust = 0.5)) + 
+    coord_polar(theta = "y")+
+    labs(title="% Right Contrast Lvl Per Successes")
+plotD=ggplot(FailRight, aes(x = "", y = perc, fill = `right contr.`)) + 
+    geom_col() + 
+    geom_text(aes(label = labels), position = position_stack(vjust = 0.5)) + 
+    coord_polar(theta = "y")+
+    labs(title="% Right Contrast Lvl Per Failures")
+grid.arrange(plotA, plotB, plotC, plotD, nrow = 2)
+
+```
+Findings from the pie charts reveal a higher proportion of successes occur with a left contrast of 0 (59.95%), than when the left contrast is one (15.89%). This differs from the right contrast level, where 47.7% successes occurred when the right contrast level was 0 and 24.5% successes occurred when the right contrast was 1. This indicates that the mice may react differently depending on right versus left contrast to achieve a successful trial. The data also shows that there is a similar percent of failures and successes when mice were presented with a 0 level right contrast. It is possible this contrast led to a guess by the mice. Although patterns of choice are not entirely clear based off these pie charts, it appears that contrast level does impact a trial's feedback in some manner.
+
+```{r, echo=FALSE, include=FALSE}
+n.session=length(session[3])
+
+meta2 <- tibble(
+  mouse_name = rep('name',n.session),
+  date_exp =rep('dt',n.session),
+  n_brain_area = rep(0,n.session),
+  n_neurons = rep(0,n.session),
+  n_trials = rep(0,n.session),
+  success_rate = rep(0,n.session),
+  contrast_left = rep(0,n.session),
+  contrast_right = rep(0,n.session)
+  
+)
+
+for(i in 1:n.session){
+  tmp = session[[i]];
+  meta2[i,1]=tmp$mouse_name;
+  meta2[i,2]=tmp$date_exp;
+  meta2[i,3]=length(unique(tmp$brain_area));
+  meta2[i,4]=dim(tmp$spks[[1]])[1];
+  meta2[i,5]=length(tmp$feedback_type); 
+  meta2[i,6]=mean(tmp$feedback_type+1)/2; 
+  meta2[i,7]=mean(tmp$contrast_left)
+  meta2[i,8]=mean(tmp$contrast_right)
+
+}
+
+colnames(meta2) <- c("Mouse Name", "Experiment Date", "Number of Brain Areas", "Number of Neurons", "Number of Trials", "Success Rate", "Average Left Contrast Level", "Average Right Contrast Level")
+
+
+kable(meta2, format = "html", table.attr = "class='table table-striped'",digits=2) 
+```
+
+  
+### How is brain area activity effected over time?
+  The brain activity could help us determine what happens when there are more trials per session and compare sessions with more versus less trials. The following two graphs take a look at spike area across two different sessions: session 12 and session 10. The purpose is to look at a session with more trials (session 10) and a session with less trials (session12).
+    
+```{r, echo=FALSE}
+i.s=12
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.s],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+# Turning it into a data frame
+trial.summary <- as_tibble(trial.summary)
+area.col=rainbow(n=n.area,alpha=0.7)
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0.5,2.2), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary[[i]],x=trial.summary$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary$id, trial.summary[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.8
+)
+
+i.s=10
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.s],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+trial.summary <- as_tibble(trial.summary)
+area.col=rainbow(n=n.area,alpha=0.7)
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0.5,2.2), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+for(i in 1:n.area){
+  lines(y=trial.summary[[i]],x=trial.summary$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary$id, trial.summary[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.8
+)
+
+```
+  
+  
+After trial 300 on Session 10, which has a dip in the average scores for mice, we can see that there is also a dip in brain activity after trial 300. This can be compared to Session 12, where CA 1, for instance, has shown higher activity. 
+
+```{r, include= FALSE, echo=FALSE}
+i.t=1 # indicator for this trial 
+
+average_spike_area<-function(i.t,this_session){
+  spk.trial = this_session$spks[[i.t]]
+  area= this_session$brain_area
+  spk.count=apply(spk.trial,1,sum)
+  spk.average.tapply=tapply(spk.count, area, mean)
+  return(spk.average.tapply)
+  }
+
+session <- list()
+sessionSpike <- numeric(18)
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  average_spike_area(1,this_session = session[[i]])
+}
+
+
+i.s=3
+n.contrast=length(unique(session[[i.s]]$contrast_left ))
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial3.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial3.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.s],
+                        i.t)
+}
+
+colnames(trial3.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+trial3.summary <- as_tibble(trial3.summary)
+
+
+names(trial3.summary)
+?cor
+
+```
+
+
+```{r, include=FALSE, echo=FALSE}
+head(full_functional_tibble)
+fftMatrix <- as.matrix(full_functional_tibble)
+heatmap(fftMatrix, scale="column")
+```
+
+```{r, include=F, echo=FALSE}
+#The number of neurons per session appears to be stabilized at 40.
+numNeurons <- vector("numeric", 18)
+
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  numNeurons[i] <- length(session[[i]]$spks[[10]][5,])
+
+}
+
+barplot(height=numNeurons, names=1:18, col="turquoise", xlab= "Session Number", ylab="Number of Neurons", main="Number of Neurons Per Session")
+
+```
+It is clear there are different brain area activity across the trials themselves and within each session. Viewing a table of the unique brain areas could be helpful to understand what is active.
+
+
+
+## **Mice**
+Perhaps the mice themselves can impact the results. It could be helpful to look at the average feedback across sessions per mice. In order to assess mice characteristics, two correlation plots will be presented for two of the mice to compare the plots. 
+
+```{r, include=FALSE, echo=FALSE}
+
+SessionsPerMouse = meta %>% group_by(`Mouse Name`) %>% count() %>% 
+  ungroup() %>% 
+  mutate(perc = `n` / sum(`n`)) %>% 
+  arrange(perc) %>%
+  mutate(labels = scales::percent(perc))
+
+ggplot(SessionsPerMouse, aes(x = "", y = perc, fill = `Mouse Name`)) + 
+    geom_col() + 
+    geom_text(aes(label = labels), position = position_stack(vjust = 0.5)) + 
+    coord_polar(theta = "y")
+
+
+
+```
+
+
+```{r, echo=FALSE}
+
+CoriMeta <- meta %>% filter(`Mouse Name`=="Cori")
+ForrMeta <-meta %>% filter(`Mouse Name`=="Forssmann")
+HenchMeta <-meta %>% filter(`Mouse Name`=="Hench")
+LederMeta <-meta %>% filter(`Mouse Name`=="Lederberg")
+
+CoriCor = CoriMeta %>% select(c(`Number of Brain Areas`, `Number of Neurons`, `Success Rate`, `Number of Trials`, `Avg. Left Contrast Level`, `Avg. Right Contrast Level`)) %>% cor
+
+plot1 <- ggcorrplot(CoriCor, type = "lower", hc.order = TRUE, lab = TRUE, title = "Cori Correlation Plot")
+
+ForrCor = ForrMeta %>% select(c(`Number of Brain Areas`, `Number of Neurons`, `Success Rate`, `Number of Trials`, `Avg. Left Contrast Level`, `Avg. Right Contrast Level`)) %>% cor
+
+plot2 <- ggcorrplot(ForrCor, type = "lower", hc.order = TRUE, lab = TRUE, title= "Forssmann Corr Plot")
+
+HenchCor = HenchMeta %>% select(c(`Number of Brain Areas`, `Number of Neurons`, `Success Rate`, `Number of Trials`, `Avg. Left Contrast Level`, `Avg. Right Contrast Level`)) %>% cor
+
+plot3 <- ggcorrplot(HenchCor, type = "lower", hc.order = TRUE, lab = TRUE, title="Hench Corr Plot")
+
+LederCor = LederMeta %>% select(c(`Number of Brain Areas`, `Number of Neurons`, `Success Rate`, `Number of Trials`, `Avg. Left Contrast Level`, `Avg. Right Contrast Level`)) %>% cor
+
+plot4 <- ggcorrplot(LederCor, type = "lower", hc.order = TRUE, lab = TRUE, title="Lederberg Cor Plot")
+
+plot1
+plot2
+
+
+```
+Using data from each session, the correlation plots showed the differences between mice. These plots show important findings. Firstly, we can see a positive correlation between number of trials and success rate, which indicates that the overall trial amount could be important to the prediction model, and this is shown for each mouse. It is possible that with practice, the mice improved their performance. The average right contrast level was shown to be negatively correlated with the success rate for both of the depicted mice, at -0.74 for Cori and -.38 for Forssmann. Number of neurons does not appear to be very important to the success for the mice. Overall, plots illustrate differences between the mice, as well as similarities. The mice themselves appear to be important to whether or not a trial is a success due to their varied reactions to different stimuli.
+
+
+```{r, echo=FALSE, include=FALSE}
+session <- list()
+avg.spikes <- vector("numeric", 18)
+
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  spks.trial=session[[i]]$spks[[i]]
+  total.spikes=apply(spks.trial,1,sum)
+  avg.spikes[i] <- mean(total.spikes)
+}
+
+(totalavg= (sum(avg.spikes))/18)
+spks.trial=session[[1]]$spks[[1]]
+total.spikes=apply(spks.trial,1,sum)
+(avg.spikes=mean(total.spikes>0))
+hist(total.spikes)
+```
+
+
+
+# **Data Integration**
+  
+## What predictor variables are important?
+```{r, echo=FALSE, include=FALSE}
+avg_spikes_per_session <- numeric(18)
+
+for(i in 1:18) {
+  session_data <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  mean_spikes_per_trial <- numeric(length(session_data$spks))
+  for(j in 1:length(session_data$spks)) {
+    mean_spikes_per_trial[j] <- mean(apply(session_data$spks[[j]], 1, sum))
+  }
+    avg_spikes_per_session[i] <- mean(mean_spikes_per_trial)
+}
+
+grand_avg <- mean(avg_spikes_per_session)
+grand_avg
+avg_spikes_per_session
+
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  spks.trial=session[[i]]$spks[[i]]
+  total.spikes=apply(spks.trial,1,sum)
+  avg.spikes[i] <- mean(total.spikes)
+}
+
+(totalavg= (sum(avg.spikes))/18)
+#In order to investigate this, each session is split into categories of data, so that there are four quartiles of trials. In order to assess the neuron average, we should use recorded neuron information in the avg
+```
+
+We have seen in the EDA section that trial number has an effect on brain activity as well as the success rate, so this will be integrated into the data. In addition, successes also improved across sessions, and mice had different patterns with the data. These two variables are also important. We have also learned that time bins are related to each other, so the time bins will remain merged into 5 time bins instead of remaining in 40 bins in an effort to reduce multicollinearity and improve the model. Multicollinearity can impact the result of logistic regression and make the prediction variables less reliable. Having 40 of these predictor variables may also over fit the data. Also this combination of the data will take an average of neuron activity per group of time bins, instead of one overall average. This way, more data can be summarized within the model.
+
+## The Integrated Table  
+  
+The integrated table is as follows: 
+```{r, echo=FALSE, include=FALSE}
+
+#other things were added into meta, which could be instead added to the top to explain what was added
+session <- list()
+feedback <- vector("numeric", 18)
+
+for(i in 1:18) {
+  session[[i]] <- readRDS(paste0('./Data/sessions/session', i, '.rds'))
+  feedback[i] <- length(session[[i]]$feedback_type)
+}
+
+
+
+library(tidyverse)
+n.session=18
+
+meta3 <- tibble(
+  mouse_name = rep('name',n.session),
+  date_exp =rep('dt',n.session),
+  n_brain_area = rep(0,n.session),
+  n_neurons = rep(0,n.session),
+  avg_neurons = rep(0,n.session),
+  n_trials = rep(0,n.session),
+  success_rate = rep(0,n.session),
+  contrast_left = rep(0,n.session),
+  contrast_right = rep(0,n.session),
+  feedback_type= rep(0,n.session)
+)
+
+for(i in 1:18){
+  tmp = session[[i]];
+  meta3[i,1]=tmp$mouse_name;
+  meta3[i,2]=tmp$date_exp;
+  meta3[i,3]=length(unique(tmp$brain_area));
+  meta3[i,4]=dim(tmp$spks[[1]])[1];
+  meta3[i,5]=mean(scale(tmp$spks[[1]])[1]);
+  meta3[i,6]=length(tmp$feedback_type);
+  meta3[i,7]=mean(tmp$feedback_type+1)/2;
+  meta3[i,8]=mean(tmp$contrast_left);
+  meta3[i,9]=mean(tmp$contrast_right);
+  meta3[i,10]=mean(tmp$feedback_type)
+}
+kable(meta3, format = "html", table.attr = "class='table table-striped'",digits=2) 
+```
+
+```{r, echo=FALSE, include=FALSE}
+(total.spikes=apply(spks.trial,1,sum))
+(avg.spikes=mean(total.spikes>1))
+
+((sum(session[[1]]$spks[[1]]>0))/length(session[[1]]$spks[[1]]))
+
+(mean((apply(spks.trial,1,sum))>0))
+
+(mean((apply(spks.trial,1,sum))>0))
+
+(mean((apply(session[[1]]$spks[[1]],1,sum))>0))
+(mean((apply(session[[1]]$spks[[1]],1,sum))>0))
+```
+
+
+```{r, echo=FALSE, include=FALSE}
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+spks.trial=session[[i]]$spks[[1]]
+total.spikes=apply(spks.trial,1,sum)
+(avg.spikes=mean(total.spikes>0))
+(mean(sum(session[[1]]$spks[[1]]>0)))
+
+createTable <- function(i.s){
+
+    n.trial=length(session[[i.s]]$feedback_type)
+    n.area=length(unique(session[[i.s]]$brain_area ))
+    trial.summary2 =matrix(nrow=n.trial,ncol= 1+1+1+1+2+1)
+    for(i.t in 1:n.trial){
+      spks.trial=session[[i]]$spks[[1]]
+      total.spikes=apply(spks.trial,1,sum)
+      trial.summary2[i.t,]=c(i.s,
+                          as.numeric(i.t),
+                          session[[i.s]]$mouse_name,
+                          feedback=(session[[i.s]]$feedback_type[i.t]+1)/2,
+                          session[[i.s]]$contrast_left[i.t],
+                          session[[i.s]]$contrast_right[i.t],
+                          avg.spikes=round(mean((apply(session[[i.s]]$spks[[i.t]],1,sum))>0), digits=2))
+                                                          
+      
+    }
+    
+    colnames(trial.summary2)=c('Session Number','Trial Number','Mouse Name', 'Feedback', 'Left Contr.','Right Contr.', 'Avg Spikes')
+  trial.summary2 <- as_tibble(trial.summary2)
+  trial.summary2
+
+}
+
+FullFrame<- rbind(createTable(1),createTable(2),createTable(3),createTable(4),createTable(5),createTable(6),createTable(7),createTable(8),createTable(9),createTable(10),createTable(11),createTable(12),createTable(13),createTable(14),createTable(15),createTable(16),createTable(17),createTable(18))
+head(FullFrame)
+
+averaged_columns_df <- as.data.frame(sapply(1:5, function(i) {
+  subset <- full_functional_tibble[, ((i-1)*8+1):(i*8)]
+    scaled_subset <- t(apply(subset, 1, function(row) {
+    (row - mean(row, na.rm = TRUE)) / sd(row, na.rm = TRUE)
+  }))
+    rowMeans(scaled_subset, na.rm = TRUE)
+}))
+
+colnames(averaged_columns_df) <- c("Time Bins:1-8", "Time Bins: 9-16", "Time Bins: 17-24", "Time Bins: 25-32", "Time Bins: 33-40")
+
+avgCol2df <- data.frame(
+  "Combined Time Bins:1-16" = rowMeans(averaged_columns_df[,c("Time Bins:1-8", "Time Bins: 9-16")], na.rm = TRUE),
+  "Time Bins: 17-24" = averaged_columns_df[,"Time Bins: 17-24"],
+  "Combined Time Bins:25-40" = rowMeans(averaged_columns_df[,c("Time Bins: 25-32", "Time Bins: 33-40")], na.rm = TRUE)
+)
+colnames(avgCol2df) <- c("Time Bins:1-16", "Time Bins: 17-24", "Time Bins: 25-40")
+head(avgCol2df)
+
+```
+
+```{r, include=FALSE, echo=FALSE}
+head(FullFrame)
+reduceFrame <-FullFrame[-c(1,7)]
+reduceFrame$feedback=as.factor(reduceFrame$Feedback)
+
+lengthRF <- length(reduceFrame$feedback)
+
+reduceFrame2 <- cbind(reduceFrame, full_functional_tibble)
+
+reduceFrame <- reduceFrame[-1]
+reduceFrame2 <- reduceFrame2[-1]
+
+```
+```{r, include=FALSE, echo=FALSE}
+head(FullFrame)
+reduceFrame <-FullFrame[-c(7)]
+reduceFrame$Feedback=as.factor(reduceFrame$Feedback)
+reduceFrame2 <- cbind(reduceFrame, averaged_columns_df )
+head(reduceFrame2)
+reduceFrame2[7:11] <- reduceFrame2[7:11] %>% 
+  lapply(scale) %>% 
+  as.data.frame()
+head(reduceFrame2)
+reduceFrame <- reduceFrame[-1]
+reduceFrame2$`Trial Number` = as.numeric(reduceFrame2$`Trial Number`)
+reduceFrame2$`Session Number` = as.numeric(reduceFrame2$`Session Number`)
+
+head(reduceFrame2)
+```
+
+```{r, echo=FALSE}
+library(rmarkdown)
+paged_table(reduceFrame2, options = NULL)
+
+```
